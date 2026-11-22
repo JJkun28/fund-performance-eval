@@ -18,10 +18,12 @@ FREQ_LABELS = {'daily': '日频', 'weekly': '周频', 'monthly': '月频', 'quar
 
 _DATE_PAT = re.compile(r'(?i)(date|日期)')
 _DATE_EXCLUDE = re.compile(r'(到期|成立|申购|赎回|分红|除息|公告)')
-_UNIT_PAT = re.compile(r'(?i)(单位净值|unit.?nav|^nav$|^净值$)')
 _ACCUM_PAT = re.compile(r'(?i)(累计|accum|cumulative)')
 _NAV_PAT = re.compile(r'(?i)(净值|nav)')
+# 名字里带这些词的“净值”列不是我们要的单位/累计净值（复权净值、净值增长率、净值日期等）
+_NAV_EXCLUDE = re.compile(r'(?i)(复权|adj|收益|增长|return|涨跌|日期|date|规模|总额|份额)')
 _RETURN_PAT = re.compile(r'(?i)(收益率|增长率|return|涨跌)')
+_UNIT_EXACT = {'单位净值', '净值', '基金净值', '产品净值', 'nav', 'unitnav'}
 _BENCH_PAT = re.compile(r'(?i)(收盘|close|点位|指数|净值|nav|价格|price|value)')
 _CN_NUM = '零〇一二三四五六七八九十百千'
 
@@ -39,37 +41,106 @@ def _first_match(cols, include, exclude=None):
     return None
 
 
-def find_columns(df: pd.DataFrame, use_accum: bool = False):
+def _norm(name) -> str:
+    """列名归一：小写、去空白和括号里的单位，如“净值(元)”→“净值”、“Unit NAV”→“unitnav”。"""
+    s = re.sub(r'[（(][^）)]*[）)]', '', str(name))
+    return re.sub(r'[\s_\-.]', '', s).lower()
+
+
+def _col_list(cols):
+    return [str(c) for c in cols]
+
+
+def _pick(cols, name, what):
+    """按用户指定的列名取列（忽略首尾空白）。"""
+    for c in cols:
+        if str(c).strip() == str(name).strip():
+            return c
+    raise SkipFund(f'找不到指定的{what} "{name}"，可用列: {_col_list(cols)}')
+
+
+def find_columns(df: pd.DataFrame, use_accum: bool = False, date_col=None, nav_col=None):
     """返回 (日期列, 净值列, 是否用了累计净值)。
 
-    use_accum=True 时优先找累计净值列（同时含“累计/accum”与“净值/nav”，排除收益率类），
-    找不到则回退到单位净值列。
+    date_col / nav_col 为用户手动指定的列名，优先使用。
+    自动识别时：use_accum=True 优先找累计净值列（含“累计/accum”和“净值/nav”），找不到回退单位净值。
+    单位净值按优先级取：列名正好是“单位净值/净值/NAV”等 > 含“单位净值/unit nav” > 其他含“净值/nav”的列；
+    复权净值、净值增长率、净值日期之类一律排除。
     """
     cols = df.columns.tolist()
-    date_col = _first_match(cols, _DATE_PAT, _DATE_EXCLUDE)
+    date_col = _pick(cols, date_col, '日期列') if date_col else _first_match(cols, _DATE_PAT, _DATE_EXCLUDE)
 
-    nav_col, used_accum = None, False
-    if use_accum:
-        for c in cols:
-            cs = str(c).strip()
-            if _ACCUM_PAT.search(cs) and _NAV_PAT.search(cs) and not _RETURN_PAT.search(cs):
-                nav_col, used_accum = c, True
-                break
-    if nav_col is None:
-        for c in cols:
-            cs = str(c).strip()
-            if _UNIT_PAT.search(cs) and not _ACCUM_PAT.search(cs):
-                nav_col = c
-                break
+    if nav_col:
+        nav_col = _pick(cols, nav_col, '净值列')
+        used_accum = bool(_ACCUM_PAT.search(str(nav_col)))
+    else:
+        nav_col, used_accum = None, False
+        usable = [c for c in cols if c != date_col and _NAV_PAT.search(str(c))
+                  and not _NAV_EXCLUDE.search(str(c))]
+        if use_accum:
+            accum = [c for c in usable if _ACCUM_PAT.search(str(c))]
+            if accum:
+                nav_col, used_accum = accum[0], True
+        if nav_col is None:
+            unit = [c for c in usable if not _ACCUM_PAT.search(str(c))]
+
+            def rank(c):
+                n = _norm(c)
+                return 0 if n in _UNIT_EXACT else 1 if ('单位净值' in n or 'unitnav' in n) else 2
+            if unit:
+                nav_col = min(unit, key=rank)  # min 在并列时保留靠前的列
 
     if date_col is None or nav_col is None:
-        raise SkipFund(f'无法识别日期列或净值列，可用列: {[str(c) for c in cols]}')
+        raise SkipFund(f'无法识别日期列或净值列，可用列: {_col_list(cols)}。'
+                       '可用 --date-col / --nav-col 手动指定')
     return date_col, nav_col, used_accum
+
+
+def parse_dates(s: pd.Series) -> pd.Series:
+    """解析日期列：支持日期/文本日期、20240105 这类整数日期、Excel 日期序列号。"""
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+    num = pd.to_numeric(s, errors='coerce')
+    valid = num.notna()
+    if valid.mean() > 0.8:
+        v = num[valid]
+        if v.between(19000101, 21001231).all():
+            return pd.to_datetime(num.astype('Int64').astype(str), format='%Y%m%d', errors='coerce')
+        if v.between(1, 80000).all():
+            return pd.to_datetime(num, unit='D', origin='1899-12-30', errors='coerce')
+    try:
+        return pd.to_datetime(s, errors='coerce', format='mixed')
+    except (TypeError, ValueError):
+        return pd.to_datetime(s, errors='coerce')
+
+
+def read_table(path: str, value_pat=None, date_name=None, value_name=None) -> pd.DataFrame:
+    """读取 Excel，自动跳过表头上方的标题行：在前 10 行里找第一行同时有日期列名和数值列名
+    （且不在同一个单元格）的行当表头；找不到就按第一行当表头。"""
+    raw = pd.read_excel(path, header=None)
+    for i in range(min(10, len(raw))):
+        cells = [(j, str(v).strip()) for j, v in enumerate(raw.iloc[i]) if pd.notna(v)]
+        if date_name:
+            d_idx = {j for j, c in cells if c == str(date_name).strip()}
+        else:
+            d_idx = {j for j, c in cells if _DATE_PAT.search(c) and not _DATE_EXCLUDE.search(c)}
+        if value_name:
+            v_idx = {j for j, c in cells if c == str(value_name).strip()}
+        elif value_pat is not None:
+            v_idx = {j for j, c in cells if value_pat.search(c)}
+        else:
+            v_idx = {j for j, _ in cells}
+        if d_idx and v_idx - d_idx:
+            header = [str(v).strip() if pd.notna(v) else f'未命名{j}' for j, v in enumerate(raw.iloc[i])]
+            df = raw.iloc[i + 1:].reset_index(drop=True)
+            df.columns = header
+            return df
+    return pd.read_excel(path)
 
 
 def _clean_series(df, date_col, value_col, value_name):
     out = pd.DataFrame({
-        'date': pd.to_datetime(df[date_col], errors='coerce').dt.normalize(),
+        'date': parse_dates(df[date_col]).dt.normalize(),
         value_name: pd.to_numeric(df[value_col], errors='coerce'),
     })
     before = len(out)
@@ -79,10 +150,10 @@ def _clean_series(df, date_col, value_col, value_name):
     return out, before - len(out)
 
 
-def load_nav(path: str, use_accum: bool = False):
-    """读取净值文件，返回 (DataFrame[date, nav], 备注列表)。"""
-    raw = pd.read_excel(path)
-    date_col, nav_col, used_accum = find_columns(raw, use_accum)
+def load_nav(path: str, use_accum: bool = False, date_col=None, nav_col=None):
+    """读取净值文件，返回 (DataFrame[date, nav], 备注列表, 实际使用的净值列名)。"""
+    raw = read_table(path, _NAV_PAT, date_col, nav_col)
+    date_col, nav_col, used_accum = find_columns(raw, use_accum, date_col, nav_col)
     df, dropped = _clean_series(raw, date_col, nav_col, 'nav')
     notes = []
     if use_accum and not used_accum:
@@ -90,13 +161,14 @@ def load_nav(path: str, use_accum: bool = False):
     if dropped:
         notes.append(f'剔除 {dropped} 行空值/无效数据')
     if len(df) < 2:
-        raise SkipFund('有效数据不足 2 行')
-    return df, notes
+        raise SkipFund(f'有效数据不足 2 行（日期列“{date_col}”、净值列“{nav_col}”，'
+                       '请检查日期和净值格式）')
+    return df, notes, str(nav_col)
 
 
 def load_benchmark(path: str) -> pd.DataFrame:
     """读取基准文件，返回 DataFrame[date, bench]。"""
-    raw = pd.read_excel(path)
+    raw = read_table(path)
     cols = raw.columns.tolist()
     date_col = _first_match(cols, _DATE_PAT, _DATE_EXCLUDE)
     if date_col is None:
@@ -290,6 +362,8 @@ class Options:
     freq: str = 'auto'
     rf: float = 0.0
     excess: str = 'geometric'
+    date_col: str | None = None
+    nav_col: str | None = None
 
 
 @dataclass
@@ -305,6 +379,7 @@ class FundResult:
     notes: list = field(default_factory=list)
     aligned: pd.DataFrame | None = None
     excess: dict | None = None
+    nav_col: str = ''
 
     @property
     def interval_label(self) -> str:
@@ -320,7 +395,7 @@ def evaluate(path: str, opts: Options, bench: pd.DataFrame | None = None) -> Fun
     name = extract_prod_name(path)
     if name is None:
         raise SkipFund('已是绩效评估输出文件')
-    df, notes = load_nav(path, opts.use_accum)
+    df, notes, nav_col = load_nav(path, opts.use_accum, opts.date_col, opts.nav_col)
     df, display_idx = slice_interval(df, opts.start, opts.end)
 
     freq_auto = opts.freq == 'auto'
@@ -342,4 +417,4 @@ def evaluate(path: str, opts: Options, bench: pd.DataFrame | None = None) -> Fun
                 notes.append(f'与基准共同日期 {len(a)}/{len(df)} 个，超额指标只用共同日期')
 
     return FundResult(path, name, df, display_idx, freq, freq_auto, factor, metrics,
-                      notes, aligned, excess)
+                      notes, aligned, excess, nav_col)

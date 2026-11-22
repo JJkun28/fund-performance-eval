@@ -28,7 +28,7 @@ pip install -r requirements.txt
 **Claude Code**：把仓库克隆到 skills 目录即可。
 
 ```bash
-git clone https://github.com/<you>/fund-performance-eval ~/.claude/skills/fund-performance-eval
+git clone https://github.com/JJkun28/fund-performance-eval ~/.claude/skills/fund-performance-eval
 ```
 
 其他支持 Agent Skills 的 agent，放到它的 skills 目录下。
@@ -47,10 +47,10 @@ git clone https://github.com/<you>/fund-performance-eval ~/.claude/skills/fund-p
 python scripts/fund_eval.py <源 .xlsx 或文件夹> [--start 2025-01-01] [--end 2025-06-30]
        [--use-accum] [--linear] [--freq auto|daily|weekly|monthly|quarterly]
        [--rf 2%] [--benchmark 基准.xlsx] [--excess geometric|arithmetic]
-       [--output-dir 目录] [--overwrite]
+       [--date-col 列名] [--nav-col 列名] [--output-dir 目录] [--overwrite]
 ```
 
-退出码：0 完成，1 出错，2 输出已存在（需要 `--overwrite`），3 输出文件被打开。
+退出码：0 完成，1 出错，2 输出已存在（需要 `--overwrite`），3 输出文件被打开。输出固定为 UTF-8，在 Windows PowerShell 里先执行 `[Console]::OutputEncoding = [Text.Encoding]::UTF8` 再看。
 
 试一下示例数据（合成数据，不是真实产品）：
 
@@ -61,18 +61,19 @@ python scripts/fund_eval.py examples/data --benchmark examples/benchmark/示例�
 
 ## 输入格式
 
-第一行是列名，至少有一个日期列和一个净值列：
+至少有一个日期列和一个净值列。表头在前 10 行内即可，上方的标题行会自动跳过：
 
 | 净值日期 | 单位净值 | 累计净值 |
 |---|---|---|
 | 2025-01-03 | 1.0030 | 1.2530 |
 | 2025-01-10 | 1.0112 | 1.2612 |
 
-- 日期列：列名含“日期”或“date”（成立日、到期日等会被排除）
-- 单位净值：单位净值 / 净值 / NAV / Unit NAV
+- 日期列：列名含“日期”或“date”（成立日、到期日等会被排除）。日期可以是日期格式、文本、`20240105` 这类整数或 Excel 日期序列号
+- 单位净值：优先取列名正好是“单位净值 / 净值 / 基金净值 / NAV / Unit NAV”的列（“净值(元)”这类括号单位会忽略），复权净值、净值增长率不会被选中
 - 累计净值：列名同时含“累计/accum”和“净值/NAV”
 - 基准文件：日期 + 收盘点位或净值
 - 产品名取自文件名：从第一个中文字符到“X号”或“X期”，例如 `大鹏9号原始数据.xlsx` → `大鹏9号`
+- 自动识别不对时，用 `--date-col` / `--nav-col` 手动指定列名
 
 ## 输出
 

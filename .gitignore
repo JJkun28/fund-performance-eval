@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 ~$*
 .~lock.*#
+
+# 示例的生成结果，由 README 里的命令重新生成
+examples/data/result/

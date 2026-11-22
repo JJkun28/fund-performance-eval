@@ -57,7 +57,7 @@ def test_no_drawdown_and_unrecovered():
 
 
 @pytest.mark.parametrize('freq,expect', [('B', 'daily'), ('W-FRI', 'weekly'),
-                                         ('ME', 'monthly'), ('QE', 'quarterly')])
+                                         ('MS', 'monthly'), ('QS', 'quarterly')])
 def test_detect_freq(freq, expect):
     assert detect_freq(pd.Series(pd.date_range('2023-01-01', periods=30, freq=freq))) == expect
 

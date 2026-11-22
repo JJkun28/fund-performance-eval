@@ -4,9 +4,9 @@
   python fund_eval.py <源 .xlsx 或文件夹> [--start YYYY-MM-DD] [--end YYYY-MM-DD]
          [--use-accum] [--linear] [--freq auto|daily|weekly|monthly|quarterly]
          [--rf 0.02|2%] [--benchmark 基准.xlsx] [--excess geometric|arithmetic]
-         [--output-dir 目录] [--overwrite]
+         [--date-col 列名] [--nav-col 列名] [--output-dir 目录] [--overwrite]
 
-退出码:
+输出固定为 UTF-8。退出码:
   0  完成（个别文件跳过也算完成，原因会打印出来）
   1  出错：路径不存在、没有可评估的文件、基准文件读不了
   2  输出文件已存在且没加 --overwrite：什么都没写，先问用户是否覆盖
@@ -32,11 +32,13 @@ def parse_rf(text: str) -> float:
     if not t:
         return 0.0
     if t.endswith('%'):
-        return float(t[:-1]) / 100
+        t = str(float(t[:-1]) / 100)
     v = float(t)
     if v >= 1:  # “2” 理解为 2%
         print(f'提示: 无风险利率 {t} 按百分比理解为 {v / 100:.2%}')
-        return v / 100
+        v /= 100
+    if v > 0.2:
+        print(f'提示: 无风险利率为 {v:.2%}，明显偏高，请确认（2% 应写成 2% 或 0.02）')
     return v
 
 
@@ -78,23 +80,28 @@ def build_parser():
     p.add_argument('--benchmark', default='', help='基准 .xlsx（日期 + 点位/净值）')
     p.add_argument('--excess', default='geometric', choices=['geometric', 'arithmetic'],
                    help='超额口径，默认几何')
+    p.add_argument('--date-col', default='', help='手动指定日期列名（自动识别失败时用）')
+    p.add_argument('--nav-col', default='', help='手动指定净值列名（自动识别失败或选错时用）')
     p.add_argument('--output-dir', default='', help='输出目录；默认单文件=源文件目录，批量=源文件夹\\result')
     p.add_argument('--overwrite', action='store_true', help='允许覆盖已存在的输出文件')
     return p
 
 
 def main(argv=None) -> int:
-    try:
-        sys.stdout.reconfigure(errors='replace')
-    except (AttributeError, ValueError):
-        pass
+    # 固定 UTF-8 输出：Windows 下默认是 GBK，agent 读到的会是乱码
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
 
     if not os.path.exists(args.source):
         print(f'错误: 路径不存在: {args.source}')
         return EXIT_ERROR
     opts = Options(start=args.start or None, end=args.end or None, use_accum=args.use_accum,
-                   linear=args.linear, freq=args.freq, rf=parse_rf(args.rf), excess=args.excess)
+                   linear=args.linear, freq=args.freq, rf=parse_rf(args.rf), excess=args.excess,
+                   date_col=args.date_col or None, nav_col=args.nav_col or None)
 
     bench = None
     if args.benchmark:
@@ -169,7 +176,7 @@ def main(argv=None) -> int:
     for r in results:
         m = r.metrics
         tag = f'  {r.name}: 区间收益 {m["interval_return"]:.2%}，年化 {m["annual_return"]:.2%}，' \
-              f'最大回撤 {m["max_drawdown"]:.2%}，{r.freq_label}'
+              f'最大回撤 {m["max_drawdown"]:.2%}，{r.freq_label}，净值列“{r.nav_col}”'
         if r.notes:
             tag += f'；备注: {"；".join(r.notes)}'
         print(tag)
