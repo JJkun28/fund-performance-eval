@@ -41,22 +41,24 @@ def no_error_cells(wb):
 
 
 SCENARIOS = {
-    'daily_compound': (dict(freq='B', periods=260, seed=1), Options(), False),
-    'weekly_linear_rf': (dict(freq='W-FRI', periods=120, seed=2), Options(linear=True, rf=0.02), False),
+    'daily_compound': (dict(freq='B', periods=260, seed=1), Options(), None),
+    'weekly_linear_rf': (dict(freq='W-FRI', periods=120, seed=2), Options(linear=True, rf=0.02), None),
     'interval_slice': (dict(freq='B', periods=300, seed=3),
-                       Options(start='2024-03-01', end='2024-09-30'), False),
-    'no_drawdown': (dict(freq='B', periods=40, shape='up'), Options(), False),
-    'unrecovered': (dict(freq='B', periods=120, seed=4, shape='crash_end'), Options(), False),
-    'bench_geometric': (dict(freq='B', periods=250, seed=5), Options(), True),
+                       Options(start='2024-03-01', end='2024-09-30'), None),
+    'no_drawdown': (dict(freq='B', periods=40, shape='up'), Options(), None),
+    'unrecovered': (dict(freq='B', periods=120, seed=4, shape='crash_end'), Options(), None),
+    'bench_geometric': (dict(freq='B', periods=250, seed=5), Options(), {}),
     'bench_arith_weekly': (dict(freq='W-FRI', periods=60, seed=6),
-                           Options(excess='arithmetic', linear=True), True),
+                           Options(excess='arithmetic', linear=True), {}),
+    'daily_vs_weekly_bench': (dict(freq='B', periods=250, seed=8), Options(),
+                              dict(freq='W-FRI', periods=60)),
 }
 
 
 @pytest.mark.parametrize('name', SCENARIOS)
 def test_fund_workbook_formulas_match_python(name, make_file, bench_file, tmp_path):
     kw, opts, use_bench = SCENARIOS[name]
-    bench = load_benchmark(bench_file()) if use_bench else None
+    bench = load_benchmark(bench_file(**use_bench)) if use_bench is not None else None
     r = evaluate(make_file(**kw), opts, bench)
     src = tmp_path / f'{name}.xlsx'
     build_fund_workbook(r, opts).save(src)
@@ -66,7 +68,7 @@ def test_fund_workbook_formulas_match_python(name, make_file, bench_file, tmp_pa
     ws = wb.worksheets[0]
     for key in NUM_KEYS | DATE_KEYS:
         check(ws[f'I{R[key]}'].value, expected(r.metrics, key), f'{name}:{key}')
-    if use_bench:
+    if use_bench is not None:
         assert r.excess is not None
         wsb = wb.worksheets[1]
         for key, row in BR.items():

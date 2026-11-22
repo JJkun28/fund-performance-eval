@@ -75,6 +75,8 @@ python scripts/fund_eval.py examples/data --benchmark examples/benchmark/示例�
 - 产品名取自文件名：从第一个中文字符到“X号”或“X期”，例如 `大鹏9号原始数据.xlsx` → `大鹏9号`
 - 自动识别不对时，用 `--date-col` / `--nav-col` 手动指定列名
 
+完整的识别规则见 [docs/input-format.md](docs/input-format.md)。
+
 ## 输出
 
 | 文件 | 内容 |

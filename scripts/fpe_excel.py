@@ -13,7 +13,7 @@ from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter, quote_sheetname
 
-from fpe_core import FundResult, Options
+from fpe_core import FREQ_LABELS, FundResult, Options
 
 # ---------------------------------------------------------------- 样式
 BLUE = '2F5496'
@@ -40,7 +40,7 @@ R = {k: i for i, k in enumerate([
     'trough_date', 'recovery_date', 'recovery_days', 'notes'], start=2)}
 # 基准 sheet 指标表行号（M 列标签，N 列数值）
 BR = {k: i for i, k in enumerate([
-    'interval', 'common_count', 'mode', 'bench_interval_return', 'bench_annual_return',
+    'interval', 'common_count', 'freq', 'factor', 'mode', 'bench_interval_return', 'bench_annual_return',
     'prod_annual_return', 'excess_interval_return', 'excess_annual_return',
     'tracking_error', 'information_ratio', 'excess_max_drawdown'], start=2)}
 
@@ -115,10 +115,10 @@ def safe_title(name: str, used: set, suffix: str = '') -> str:
     clean = re.sub(r"[\[\]:*?/\\']", '_', name)
     room = 31 - len(suffix)
     title, i = clean[:room] + suffix, 2
-    while title in used:
+    while title.casefold() in used:  # Excel 的 sheet 名不区分大小写
         tag = f'({i})'
         title, i = clean[:room - len(tag)] + tag + suffix, i + 1
-    used.add(title)
+    used.add(title.casefold())
     return title
 
 
@@ -207,7 +207,7 @@ def write_bench_sheet(ws, r: FundResult, opts: Options, main_title: str):
 
     n_ = lambda k: f'N{BR[k]}'  # noqa: E731
     days = f'A{M}-A2'
-    factor = f'{quote_sheetname(main_title)}!$I${R["factor"]}'
+    factor = n_('factor')  # 共同日期自己的年化系数（可能和产品 sheet 不同）
     ex_ann = ('=' + _ann(f'F{M}', days, opts.linear)) if geo else \
         f'={n_("prod_annual_return")}-{n_("bench_annual_return")}'
     d = a['date']
@@ -216,6 +216,8 @@ def write_bench_sheet(ws, r: FundResult, opts: Options, main_title: str):
     rows = [
         ('interval', '共同区间', f'{d.iloc[0]:%Y/%m/%d}-{d.iloc[-1]:%Y/%m/%d}', TEXT),
         ('common_count', '共同日期数', f'=COUNT(A2:A{M})', '0'),
+        ('freq', '共同日期频率', FREQ_LABELS[r.bench_freq], TEXT),
+        ('factor', '年化系数（可改）', r.bench_factor, '0'),
         ('mode', '超额口径', '几何（产品÷基准）' if geo else '算术（产品−基准）', TEXT),
         ('bench_interval_return', '基准区间收益', f'=C{M}/C2-1', PCT),
         ('bench_annual_return', '基准年化收益', '=' + _ann(f'C{M}/C2', days, opts.linear), PCT),
@@ -228,7 +230,7 @@ def write_bench_sheet(ws, r: FundResult, opts: Options, main_title: str):
         ('excess_max_drawdown', '超额最大回撤', f'=MIN(K2:K{M})', PCT),
     ]
     for key, label, val, fmt in rows:
-        _ind(ws, BR[key], 13, label, val, fmt)
+        _ind(ws, BR[key], 13, label, val, fmt, input_cell=key == 'factor')
 
     p = a['nav'] / a['nav'].iloc[0]
     b = a['bench'] / a['bench'].iloc[0]

@@ -110,6 +110,7 @@ def main(argv=None) -> int:
         except Exception as e:  # noqa: BLE001
             print(f'错误: 基准文件读取失败: {args.benchmark} ({e})')
             return EXIT_ERROR
+        print(f'基准列: “{bench.attrs["value_col"]}”（{os.path.basename(args.benchmark)}）')
 
     files, out_dir, batch = collect_sources(args.source)
     if args.benchmark:  # 基准文件放在批量文件夹里时不当作产品
@@ -121,7 +122,9 @@ def main(argv=None) -> int:
         return EXIT_ERROR
 
     # 1) 先在内存里算完全部产品
-    results, skipped, names = [], [], set()
+    # 输出文件名按不区分大小写去重（Windows/macOS 文件系统如此），批量时预留汇总表的文件名
+    taken = {SUMMARY_NAME.casefold()} if batch else set()
+    results, skipped = [], []
     for f in files:
         try:
             r = evaluate(f, opts, bench)
@@ -132,9 +135,11 @@ def main(argv=None) -> int:
             skipped.append((f, f'读取或计算出错: {e}'))
             continue
         base, i = r.name, 2
-        while r.name in names:
+        while f'{r.name}绩效评估.xlsx'.casefold() in taken:
             r.name, i = f'{base}({i})', i + 1
-        names.add(r.name)
+        if r.name != base:
+            r.notes.append(f'与其他输出文件重名，已改名为“{r.name}”')
+        taken.add(f'{r.name}绩效评估.xlsx'.casefold())
         results.append(r)
 
     if not results:
@@ -164,13 +169,21 @@ def main(argv=None) -> int:
     jobs = [(build_fund_workbook(r, opts), p) for r, p in planned]
     if batch:
         jobs.append((build_summary_workbook(results, opts), os.path.join(out_dir, SUMMARY_NAME)))
+    written = []
     for wb, p in jobs:
         try:
             wb.save(p)
         except PermissionError:
+            # 写入前的检查和保存之间有时间差，这时前面的文件已经落盘，必须如实说明
+            print('写入中途遇到文件被打开，本次只写入了部分文件。')
             print(f'被占用: {p}')
-            print('写入中途遇到文件被打开，请关闭后加 --overwrite 重新运行。')
+            for w in written:
+                print(f'已写入: {w}')
+            if not written:
+                print('（本次没有写入任何文件）')
+            print('请关闭被占用的文件后，加 --overwrite 重新运行整批。')
             return EXIT_LOCKED
+        written.append(p)
         print(('已覆盖: ' if p in existing else '已完成: ') + p)
 
     for r in results:

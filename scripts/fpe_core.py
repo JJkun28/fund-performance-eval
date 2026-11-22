@@ -24,7 +24,10 @@ _NAV_PAT = re.compile(r'(?i)(净值|nav)')
 _NAV_EXCLUDE = re.compile(r'(?i)(复权|adj|收益|增长|return|涨跌|日期|date|规模|总额|份额)')
 _RETURN_PAT = re.compile(r'(?i)(收益率|增长率|return|涨跌)')
 _UNIT_EXACT = {'单位净值', '净值', '基金净值', '产品净值', 'nav', 'unitnav'}
-_BENCH_PAT = re.compile(r'(?i)(收盘|close|点位|指数|净值|nav|价格|price|value)')
+# 基准取值列：先找明确的收盘/点位列，再找净值/指数/价格类；代码、名称这类标识列一律排除
+_BENCH_PRIMARY = re.compile(r'(?i)(收盘|close|点位)')
+_BENCH_SECONDARY = re.compile(r'(?i)(净值|nav|指数|价格|price|value)')
+_BENCH_EXCLUDE = re.compile(r'(?i)(代码|code|名称|简称|name|ticker|symbol|证券|^id$|编号)')
 _CN_NUM = '零〇一二三四五六七八九十百千'
 
 
@@ -167,23 +170,33 @@ def load_nav(path: str, use_accum: bool = False, date_col=None, nav_col=None):
 
 
 def load_benchmark(path: str) -> pd.DataFrame:
-    """读取基准文件，返回 DataFrame[date, bench]。"""
+    """读取基准文件，返回 DataFrame[date, bench]；实际使用的列名记在 df.attrs['value_col']。
+
+    取值列只在“大部分是数字、且不是常数”的列里选（指数代码 000300 也是数字，但每行都一样），
+    排除代码、名称等标识列；优先收盘/点位，其次净值/指数/价格，最后才取第一个可用数值列。
+    """
     raw = read_table(path)
     cols = raw.columns.tolist()
     date_col = _first_match(cols, _DATE_PAT, _DATE_EXCLUDE)
     if date_col is None:
-        raise ValueError(f'基准文件无法识别日期列，可用列: {[str(c) for c in cols]}')
-    value_col = _first_match([c for c in cols if c != date_col], _BENCH_PAT, _RETURN_PAT)
-    if value_col is None:  # 退而求其次：第一个数值列
-        for c in cols:
-            if c != date_col and pd.to_numeric(raw[c], errors='coerce').notna().mean() > 0.8:
-                value_col = c
-                break
+        raise ValueError(f'基准文件无法识别日期列，可用列: {_col_list(cols)}')
+
+    def usable(c):
+        if c == date_col or _BENCH_EXCLUDE.search(str(c)) or _RETURN_PAT.search(str(c)):
+            return False
+        v = pd.to_numeric(raw[c], errors='coerce')
+        return v.notna().mean() > 0.8 and v.nunique() > 1
+
+    candidates = [c for c in cols if usable(c)]
+    value_col = (next((c for c in candidates if _BENCH_PRIMARY.search(str(c))), None)
+                 or next((c for c in candidates if _BENCH_SECONDARY.search(str(c))), None)
+                 or (candidates[0] if candidates else None))
     if value_col is None:
-        raise ValueError(f'基准文件无法识别点位/净值列，可用列: {[str(c) for c in cols]}')
+        raise ValueError(f'基准文件无法识别点位/净值列，可用列: {_col_list(cols)}')
     df, _ = _clean_series(raw, date_col, value_col, 'bench')
     if len(df) < 2:
         raise ValueError('基准文件有效数据不足 2 行')
+    df.attrs['value_col'] = str(value_col)
     return df
 
 
@@ -380,6 +393,11 @@ class FundResult:
     aligned: pd.DataFrame | None = None
     excess: dict | None = None
     nav_col: str = ''
+    bench_freq: str | None = None
+
+    @property
+    def bench_factor(self) -> int | None:
+        return FREQ_FACTORS[self.bench_freq] if self.bench_freq else None
 
     @property
     def interval_label(self) -> str:
@@ -412,9 +430,13 @@ def evaluate(path: str, opts: Options, bench: pd.DataFrame | None = None) -> Fun
             notes.append('与基准的共同日期不足 2 个，未计算超额')
         else:
             aligned = a
-            excess = compute_excess(a, factor, opts.excess, opts.linear)
+            # 共同日期的频率可能比产品低（如日频产品 vs 周频基准），超额指标按共同日期自己的频率年化
+            bench_freq = detect_freq(a['date'])
+            excess = compute_excess(a, FREQ_FACTORS[bench_freq], opts.excess, opts.linear)
             if len(a) < len(df):
                 notes.append(f'与基准共同日期 {len(a)}/{len(df)} 个，超额指标只用共同日期')
+            if bench_freq != freq:
+                notes.append(f'共同日期为{FREQ_LABELS[bench_freq]}，超额指标按{FREQ_LABELS[bench_freq]}年化')
 
     return FundResult(path, name, df, display_idx, freq, freq_auto, factor, metrics,
-                      notes, aligned, excess, nav_col)
+                      notes, aligned, excess, nav_col, bench_freq if aligned is not None else None)
