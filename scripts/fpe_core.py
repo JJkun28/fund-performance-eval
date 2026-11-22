@@ -117,10 +117,8 @@ def parse_dates(s: pd.Series) -> pd.Series:
         return pd.to_datetime(s, errors='coerce')
 
 
-def read_table(path: str, value_pat=None, date_name=None, value_name=None) -> pd.DataFrame:
-    """读取 Excel，自动跳过表头上方的标题行：在前 10 行里找第一行同时有日期列名和数值列名
-    （且不在同一个单元格）的行当表头；找不到就按第一行当表头。"""
-    raw = pd.read_excel(path, header=None)
+def _find_header(raw, value_pat, date_name, value_name):
+    """返回表头所在行号：第一行同时有日期列名和数值列名（且不在同一个单元格）的行；找不到返回 None。"""
     for i in range(min(10, len(raw))):
         cells = [(j, str(v).strip()) for j, v in enumerate(raw.iloc[i]) if pd.notna(v)]
         if date_name:
@@ -134,11 +132,23 @@ def read_table(path: str, value_pat=None, date_name=None, value_name=None) -> pd
         else:
             v_idx = {j for j, _ in cells}
         if d_idx and v_idx - d_idx:
-            header = [str(v).strip() if pd.notna(v) else f'未命名{j}' for j, v in enumerate(raw.iloc[i])]
-            df = raw.iloc[i + 1:].reset_index(drop=True)
-            df.columns = header
-            return df
-    return pd.read_excel(path)
+            return i
+    return None
+
+
+def read_table(path: str, value_pat=None, date_name=None, value_name=None) -> pd.DataFrame:
+    """读取 Excel，自动跳过表头上方的标题行。先按用户指定的列名找表头，
+    这个文件里没有指定的列名时再按关键词找；都找不到就按第一行当表头。"""
+    raw = pd.read_excel(path, header=None)
+    i = _find_header(raw, value_pat, date_name, value_name)
+    if i is None and (date_name or value_name):
+        i = _find_header(raw, value_pat, None, None)
+    if i is None:
+        return pd.read_excel(path)
+    header = [str(v).strip() if pd.notna(v) else f'未命名{j}' for j, v in enumerate(raw.iloc[i])]
+    df = raw.iloc[i + 1:].reset_index(drop=True)
+    df.columns = header
+    return df
 
 
 def _clean_series(df, date_col, value_col, value_name):
@@ -153,12 +163,24 @@ def _clean_series(df, date_col, value_col, value_name):
     return out, before - len(out)
 
 
-def load_nav(path: str, use_accum: bool = False, date_col=None, nav_col=None):
-    """读取净值文件，返回 (DataFrame[date, nav], 备注列表, 实际使用的净值列名)。"""
+def load_nav(path: str, use_accum: bool = False, date_col=None, nav_col=None, strict: bool = True):
+    """读取净值文件，返回 (DataFrame[date, nav], 备注列表, 实际使用的净值列名)。
+
+    strict=False（批量模式）时，文件里没有用户指定的列名就改用自动识别并写进备注，
+    这样同一批里表头不同的文件可以一起重跑，不会修好一个、弄坏另一个。
+    """
     raw = read_table(path, _NAV_PAT, date_col, nav_col)
+    notes = []
+    if not strict:
+        names = {str(c).strip() for c in raw.columns}
+        if date_col and str(date_col).strip() not in names:
+            notes.append(f'没有指定的日期列“{date_col}”，已自动识别')
+            date_col = None
+        if nav_col and str(nav_col).strip() not in names:
+            notes.append(f'没有指定的净值列“{nav_col}”，已自动识别')
+            nav_col = None
     date_col, nav_col, used_accum = find_columns(raw, use_accum, date_col, nav_col)
     df, dropped = _clean_series(raw, date_col, nav_col, 'nav')
-    notes = []
     if use_accum and not used_accum:
         notes.append('未找到累计净值列，已使用单位净值')
     if dropped:
@@ -377,6 +399,7 @@ class Options:
     excess: str = 'geometric'
     date_col: str | None = None
     nav_col: str | None = None
+    strict_cols: bool = True  # 批量时为 False：文件里没有指定列就回退自动识别
 
 
 @dataclass
@@ -413,7 +436,7 @@ def evaluate(path: str, opts: Options, bench: pd.DataFrame | None = None) -> Fun
     name = extract_prod_name(path)
     if name is None:
         raise SkipFund('已是绩效评估输出文件')
-    df, notes, nav_col = load_nav(path, opts.use_accum, opts.date_col, opts.nav_col)
+    df, notes, nav_col = load_nav(path, opts.use_accum, opts.date_col, opts.nav_col, opts.strict_cols)
     df, display_idx = slice_interval(df, opts.start, opts.end)
 
     freq_auto = opts.freq == 'auto'

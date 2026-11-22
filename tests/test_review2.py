@@ -110,3 +110,39 @@ def test_benchmark_column_is_printed(tmp_path, capsys):
 
 def test_module_exposes_summary_name():
     assert fund_eval.SUMMARY_NAME == '基金汇总绩效评估.xlsx'
+
+
+def _mixed_batch(tmp_path):
+    """甲是标准表头；乙的列名自动识别不了；丙有标题行、表头也标准。"""
+    d = pd.date_range('2024-01-05', periods=30, freq='W-FRI')
+    nav = np.round(np.linspace(1, 1.1, 30), 4)
+    pd.DataFrame({'净值日期': d, '单位净值': nav}).to_excel(tmp_path / '甲1号.xlsx', index=False)
+    pd.DataFrame({'时点': d, '价值A': nav * 1.02}).to_excel(tmp_path / '乙2号.xlsx', index=False)
+    wb = Workbook()
+    wb.active.append(['丙3号 净值表'])
+    wb.active.append(['净值日期', '单位净值'])
+    for x, v in zip(d, nav * 0.98):
+        wb.active.append([x.to_pydatetime(), float(v)])
+    wb.save(tmp_path / '丙3号.xlsx')
+
+
+def test_batch_rerun_with_manual_columns_keeps_other_products(tmp_path, capsys):
+    """按 SKILL.md 补跑：带上乙的列名重跑整个文件夹，甲、丙不能因此被跳过，汇总表三只都在。"""
+    _mixed_batch(tmp_path)
+    assert main([str(tmp_path)]) == EXIT_OK
+    assert '跳过: 乙2号.xlsx' in capsys.readouterr().out
+
+    assert main([str(tmp_path), '--date-col', '时点', '--nav-col', '价值A', '--overwrite']) == EXIT_OK
+    out = capsys.readouterr().out
+    assert '跳过' not in out
+    assert '没有指定的日期列“时点”，已自动识别' in out and '净值列“价值A”' in out
+
+    ws = load_workbook(tmp_path / 'result' / SUMMARY_NAME)['汇总']
+    assert sorted(r[0].value for r in ws.iter_rows(min_row=2)) == ['丙3号', '乙2号', '甲1号']
+
+
+def test_single_file_manual_column_still_strict(tmp_path, capsys):
+    _mixed_batch(tmp_path)
+    from fund_eval import EXIT_ERROR
+    assert main([str(tmp_path / '甲1号.xlsx'), '--nav-col', '价值A']) == EXIT_ERROR
+    assert '找不到指定的净值列' in capsys.readouterr().out

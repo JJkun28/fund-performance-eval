@@ -80,8 +80,8 @@ def build_parser():
     p.add_argument('--benchmark', default='', help='基准 .xlsx（日期 + 点位/净值）')
     p.add_argument('--excess', default='geometric', choices=['geometric', 'arithmetic'],
                    help='超额口径，默认几何')
-    p.add_argument('--date-col', default='', help='手动指定日期列名（自动识别失败时用）')
-    p.add_argument('--nav-col', default='', help='手动指定净值列名（自动识别失败或选错时用）')
+    p.add_argument('--date-col', default='', help='手动指定日期列名；批量时只用于有这一列的文件，其余自动识别')
+    p.add_argument('--nav-col', default='', help='手动指定净值列名；批量时只用于有这一列的文件，其余自动识别')
     p.add_argument('--output-dir', default='', help='输出目录；默认单文件=源文件目录，批量=源文件夹\\result')
     p.add_argument('--overwrite', action='store_true', help='允许覆盖已存在的输出文件')
     return p
@@ -113,6 +113,7 @@ def main(argv=None) -> int:
         print(f'基准列: “{bench.attrs["value_col"]}”（{os.path.basename(args.benchmark)}）')
 
     files, out_dir, batch = collect_sources(args.source)
+    opts.strict_cols = not batch  # 批量时指定列只用于有这一列的文件
     if args.benchmark:  # 基准文件放在批量文件夹里时不当作产品
         files = [f for f in files
                  if os.path.normcase(os.path.abspath(f)) != os.path.normcase(os.path.abspath(args.benchmark))]
