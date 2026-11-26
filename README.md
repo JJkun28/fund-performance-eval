@@ -1,10 +1,14 @@
 # fund-performance-eval · 基金绩效评估
 
-> **English:** An Agent Skill (Claude Code and other Agent Skills–compatible agents) that turns fund NAV spreadsheets into performance-evaluation Excel workbooks: return, annualized return, volatility, max drawdown with recovery dates, Sharpe / Calmar / Sortino, and optional benchmark excess return, tracking error and information ratio. Every metric is written as a live Excel formula, with native line charts. Single file or whole-folder batch. Documentation is in Chinese.
+> **English:** An Agent Skill, usable with any Agent Skills–compatible agent, that turns fund NAV spreadsheets into performance-evaluation Excel workbooks: return, annualized return, volatility, max drawdown with recovery dates, Sharpe / Calmar / Sortino, and optional benchmark excess return, tracking error and information ratio. Every metric is written as a live Excel formula, with native line charts. Single file or whole-folder batch. Documentation is in Chinese.
 
 把基金净值表交给 agent，说一句“算一下绩效”，就能拿到一份可以直接发给同事的绩效评估 Excel。
 
 ![单只产品明细](docs/fund-sheet.png)
+
+![净值曲线](docs/fund-chart.png)
+
+想直接看成品，下载示例工作簿（合成数据）：[汇总](examples/output/基金汇总绩效评估.xlsx) · [示例成长1号](examples/output/示例成长1号绩效评估.xlsx) · [示例稳健2号](examples/output/示例稳健2号绩效评估.xlsx)
 
 ## 特点
 
@@ -17,6 +21,8 @@
 
 ![基准对比](docs/benchmark-sheet.png)
 
+![产品、基准、超额曲线](docs/benchmark-chart.png)
+
 ## 安装
 
 需要 Python 3.9+：
@@ -25,13 +31,11 @@
 pip install -r requirements.txt
 ```
 
-**Claude Code**：把仓库克隆到 skills 目录即可。
+适用于支持 Agent Skills 的 agent。进入你所用 agent 的 skills 目录（位置见它的文档），把仓库克隆下来即可：
 
 ```bash
-git clone https://github.com/JJkun28/fund-performance-eval ~/.claude/skills/fund-performance-eval
+git clone https://github.com/JJkun28/fund-performance-eval
 ```
-
-其他支持 Agent Skills 的 agent，放到它的 skills 目录下。
 
 ## 用法
 
@@ -58,6 +62,8 @@ python scripts/fund_eval.py <源 .xlsx 或文件夹> [--start 2025-01-01] [--end
 python examples/make_examples.py
 python scripts/fund_eval.py examples/data --benchmark examples/benchmark/示例基准指数.xlsx
 ```
+
+运行结果写到 `examples/data/result/`。仓库里 [examples/output/](examples/output/) 放了一份现成的结果，不运行也能打开看。
 
 ## 输入格式
 
